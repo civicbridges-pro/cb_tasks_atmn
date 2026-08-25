@@ -59,6 +59,7 @@ def phase1_config():
         people=copy.deepcopy(cfg.people), routing=copy.deepcopy(cfg.routing),
         sla=copy.deepcopy(cfg.sla), guardrails=copy.deepcopy(cfg.guardrails),
         naming=copy.deepcopy(cfg.naming), counterparties=copy.deepcopy(cfg.counterparties),
+        compliance=copy.deepcopy(cfg.compliance),
     )
     clone.guardrails["phase"] = 1
     clone.problems = cfg.problems

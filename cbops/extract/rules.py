@@ -207,6 +207,42 @@ SOLICITATION_CLOSE_PATTERNS = [
 ]
 
 
+# What the other party is asking of us, as opposed to when a solicitation closes. Both can
+# appear in one message and they drive different clocks: a close date sets the vendor chase
+# cadence, a requested date sets what we owe and when.
+# The preposition stays inside the captured group on purpose. `resolve_deadline` uses
+# "by" / "before" to tell a date from a number, so consuming it here would either drop
+# "by the 28th" or force the date parser to accept a bare ordinal, and a bare ordinal makes
+# "the 3rd party" parse as a deadline.
+REQUESTED_DEADLINE_PATTERNS = [
+    r"\b(?:we|i)\s+(?:need|require|want)\s+(?:it|this|that|them|the\s+\w+|pricing|a\s+quote|the\s+quote|quotes?)?\s*(?P<date>(?:by|before|no later than)\s+[^\n.;,]{3,40})",
+    r"\b(?:need|require|want)s?\s+(?:to be\s+)?(?:it|this|that|them|pricing|quotes?|the\s+\w+)?\s*(?P<date>(?:by|before|no later than)\s+[^\n.;,]{3,40})",
+    r"\b(?:required|needed|wanted|expected)\s+(?:back\s+)?(?P<date>(?:by|before|no later than)\s+[^\n.;,]{3,40})",
+    r"\bmust\s+be\s+(?:received|submitted|delivered|returned|completed)\s+(?P<date>(?:by|before|no later than)\s+[^\n.;,]{3,40})",
+    r"\b(?:deadline|cut ?off)\s+(?:is|:)\s*(?P<date>[^\n.;,]{3,40})",
+    r"\b(?:in hand|on site|on our dock)\s+(?P<date>(?:by|before|no later than)\s+[^\n.;,]{3,40})",
+    r"\b(?:please|kindly)\s+(?:send|provide|confirm|advise|quote|respond|return)[^\n.;]{0,60}?(?P<date>(?:by|before|no later than)\s+[^\n.;,]{3,40})",
+]
+
+
+def find_requested_deadline(text: str, sent_at: dt.datetime) -> Deadline | None:
+    """A date the other party is asking us to hit.
+
+    Without this, an inbound "we need pricing by the 28th" falls back to a generic SLA
+    clock, which is both less accurate and less persuasive: a due date a customer wrote
+    themselves is not arguable, and a computed one always is.
+    """
+    for pattern in REQUESTED_DEADLINE_PATTERNS:
+        match = re.search(pattern, text or "", re.I)
+        if not match:
+            continue
+        found = resolve_deadline(match.group("date"), sent_at)
+        if found:
+            return Deadline(text=match.group(0).strip()[:80], at=found.at,
+                            precision=found.precision)
+    return None
+
+
 def find_solicitation_close(text: str, sent_at: dt.datetime) -> Deadline | None:
     """The external clock a vendor chase should hang off, not a fixed interval."""
     for pattern in SOLICITATION_CLOSE_PATTERNS:
@@ -408,6 +444,12 @@ def looks_like_closer(text: str) -> bool:
     return any(re.search(p, stripped) for p in CLOSER_PATTERNS[1:])
 
 
+def _deadline_dict(found: "Deadline | None") -> dict[str, Any] | None:
+    if found is None:
+        return None
+    return {"text": found.text, "at": found.at.isoformat() if found.at else None}
+
+
 def summarize(cfg: Config, text: str, sent_at: dt.datetime,
               direction: str, is_internal: bool) -> dict[str, Any]:
     """Everything the rules layer can say about one message, in one pass."""
@@ -428,9 +470,13 @@ def summarize(cfg: Config, text: str, sent_at: dt.datetime,
             {"to_person": h.to_person, "text": h.text, "confidence": h.confidence}
             for h in (find_handoffs(cfg, text) if is_internal else [])
         ],
-        "solicitation_close": (
-            lambda d: {"text": d.text, "at": d.at.isoformat() if d.at else None} if d else None
-        )(find_solicitation_close(text, sent_at)),
+        "solicitation_close": _deadline_dict(find_solicitation_close(text, sent_at)),
+        # Only meaningful on inbound mail: a date we asked someone else to hit is a chase,
+        # not something we owe, and the commitment detector already covers our own promises.
+        "requested_deadline": (
+            _deadline_dict(find_requested_deadline(text, sent_at))
+            if direction == "inbound" else None
+        ),
         "contains_ask": contains_ask(text),
         "looks_like_closer": looks_like_closer(text),
     }

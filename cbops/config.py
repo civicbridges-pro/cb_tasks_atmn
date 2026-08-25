@@ -49,6 +49,9 @@ class Config:
     guardrails: dict[str, Any]
     naming: dict[str, Any]
     counterparties: dict[str, Any]
+    # Optional: the compliance calendar runs off config alone, with no mail and no store,
+    # so a checkout without it still works rather than failing to load.
+    compliance: dict[str, Any] = field(default_factory=dict)
     problems: list[Problem] = field(default_factory=list)
 
     # -- people ------------------------------------------------------------
@@ -188,6 +191,10 @@ class Config:
     def importance(self, counterparty_class: str) -> int:
         classes = self.counterparties.get("classes", {}) or {}
         return int(classes.get(counterparty_class, {}).get("importance", 50))
+
+
+def _load_yaml_optional(path: Path) -> dict[str, Any]:
+    return _load_yaml(path) if path.exists() else {}
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -334,6 +341,27 @@ def validate(cfg: Config) -> list[Problem]:
         except re.error as exc:
             problems.append(Problem("error", f"naming.reference_patterns.{name}", f"does not compile: {exc}"))
 
+    for key, item in (cfg.compliance.get("items", {}) or {}).items():
+        where = f"compliance.{key}"
+        if not item.get("name"):
+            problems.append(Problem("error", where, "missing name"))
+        owner = item.get("owner") or (cfg.compliance.get("defaults", {}) or {}).get("owner")
+        if owner and owner not in people:
+            problems.append(Problem("error", f"{where}.owner", f"unknown person {owner!r}"))
+        elif not owner:
+            problems.append(Problem("error", where, "no owner; a compliance item with no "
+                                                    "named human is how a lapse happens"))
+        if not item.get("consequence"):
+            problems.append(Problem(
+                "warn", where,
+                "no consequence written. A row nobody understands the stakes of is a row "
+                "nobody renews",
+            ))
+        lead = item.get("renewal_lead_days")
+        if lead is not None and (not isinstance(lead, int) or lead < 0):
+            problems.append(Problem("error", f"{where}.renewal_lead_days",
+                                    f"expected a non-negative integer, got {lead!r}"))
+
     if not cfg.our_domains:
         problems.append(
             Problem("error", "counterparties.our_domains",
@@ -346,6 +374,7 @@ def validate(cfg: Config) -> list[Problem]:
         (cfg.sla, "sla.yaml"),
         (cfg.guardrails, "guardrails.yaml"),
         (cfg.counterparties, "counterparties.yaml"),
+        (cfg.compliance, "compliance.yaml"),
     ):
         _find_todos(source, where, problems)
 
@@ -377,6 +406,7 @@ def load_unvalidated(config_dir: Path | None = None) -> Config:
         guardrails=_load_yaml(directory / "guardrails.yaml"),
         naming=_load_yaml(directory / "naming.yaml"),
         counterparties=_load_yaml(directory / "counterparties.yaml"),
+        compliance=_load_yaml_optional(directory / "compliance.yaml"),
     )
     cfg.problems = validate(cfg)
     return cfg

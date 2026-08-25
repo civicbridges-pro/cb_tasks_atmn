@@ -145,3 +145,48 @@ class AskTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RequestedDeadlineTest(unittest.TestCase):
+    """A date the counterparty asked us to hit, as opposed to one we promised."""
+
+    def setUp(self):
+        self.cfg = load_config()
+
+    def _at(self, text: str):
+        found = rules.find_requested_deadline(text, TUESDAY)
+        return found.at.date() if found and found.at else None
+
+    def test_a_customer_stated_date_is_found(self):
+        self.assertEqual(self._at("We need pricing by the 28th to get the requisition "
+                                  "approved."), dt.date(2026, 8, 28))
+
+    def test_various_phrasings(self):
+        cases = {
+            "Quote must be received by 9/4.": dt.date(2026, 9, 4),
+            "Deadline is Friday.": dt.date(2026, 8, 28),
+            "Parts need to be in hand by September 10.": dt.date(2026, 9, 10),
+            "Response required by 8/30.": dt.date(2026, 8, 30),
+            "Please confirm the delivery date by Thursday.": dt.date(2026, 8, 27),
+        }
+        for text, expected in cases.items():
+            self.assertEqual(self._at(text), expected, text)
+
+    def test_an_ordinal_in_ordinary_prose_is_not_a_deadline(self):
+        """The reason the preposition stays inside the captured group."""
+        self.assertIsNone(self._at("We used the 3rd party lab for testing."))
+
+    def test_our_own_promise_is_not_a_request(self):
+        """The commitment detector owns those. Counting them twice double-books the clock."""
+        self.assertIsNone(self._at("I will send the quote Friday."))
+
+    def test_ordinary_mail_yields_nothing(self):
+        self.assertIsNone(self._at("Thanks for the update."))
+
+    def test_it_only_runs_on_inbound_mail(self):
+        text = "We need pricing by the 28th."
+        inbound = rules.summarize(self.cfg, text, TUESDAY, "inbound", False)
+        outbound = rules.summarize(self.cfg, text, TUESDAY, "outbound", False)
+        self.assertIsNotNone(inbound["requested_deadline"])
+        self.assertIsNone(outbound["requested_deadline"],
+                          "a date we asked someone else to hit is a chase, not a debt")

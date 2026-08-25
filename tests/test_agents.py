@@ -103,12 +103,22 @@ class CandidateTest(unittest.TestCase):
         ]
         self.assertEqual(marotta[0].direction, "they_owe_us")
 
-    def test_a_stated_date_beats_the_sla_clock(self):
+    def test_a_date_we_committed_to_beats_the_sla_clock(self):
         promised = [
             c for group in self.by_type.values() for c in group
-            if c.due_basis and "stated in the message" in c.due_basis
+            if c.due_basis and "we committed to it" in c.due_basis
         ]
-        self.assertTrue(promised, "a date the sender wrote must win over a computed clock")
+        self.assertTrue(promised, "a date we wrote ourselves must win over a computed clock")
+
+    def test_a_date_the_counterparty_asked_for_beats_the_sla_clock(self):
+        """They wrote it, so it is not arguable. A computed clock always is."""
+        requested = [
+            c for group in self.by_type.values() for c in group
+            if c.due_basis and "they asked for it" in c.due_basis
+        ]
+        self.assertTrue(requested,
+                        "an inbound 'we need pricing by the 28th' must set the due date")
+        self.assertTrue(all(c.due_at for c in requested))
 
     def test_one_obligation_per_thread_and_type(self):
         seen = [(c.thread_key, c.type) for group in self.by_type.values() for c in group]
@@ -435,3 +445,142 @@ class SeverityTest(unittest.TestCase):
                 for row in integrity),
             f"unexpected critical checks: {[r['check'] for r in integrity]}",
         )
+
+
+class ModelLayerTest(unittest.TestCase):
+    """What the model may and may not change.
+
+    The message body is untrusted external text, so these are enforced in code rather than
+    requested in the prompt. A prompt is a request; this is a guarantee.
+    """
+
+    def setUp(self):
+        self.cfg = load_config()
+        self.always_human = set(
+            self.cfg.guardrails["confidence"]["always_human_review"])
+
+    def _candidate(self, **overrides):
+        fields = dict(
+            message_id=1, thread_key="t1", type="vendor_quote",
+            what_is_owed="quote on the switch", direction="they_owe_us",
+            counterparty="vendor.example", counterparty_class="oem", contract_ref=None,
+            source="email", source_ref="t1#1", confidence=0.60,
+        )
+        fields.update(overrides)
+        return triage.Candidate(**fields)
+
+    def _merge(self, candidate, payload):
+        triage._merge_model_verdict(self.cfg, candidate, payload, self.always_human)
+        return candidate
+
+    def test_the_model_can_reclassify(self):
+        candidate = self._merge(self._candidate(),
+                                {"type": "purchase_order", "confidence": 0.9})
+        self.assertEqual(candidate.type, "purchase_order")
+        self.assertIn("reclassified", candidate.reason)
+
+    def test_the_model_cannot_invent_a_type_the_ledger_rejects(self):
+        candidate = self._merge(self._candidate(), {"type": "nonsense", "confidence": 0.9})
+        self.assertEqual(candidate.type, "vendor_quote")
+
+    def test_withdrawing_a_finding_sends_it_to_a_human_rather_than_deleting_it(self):
+        """A wrongly withdrawn obligation is invisible; a wrongly kept one costs seconds."""
+        candidate = self._merge(self._candidate(), {"has_obligation": False})
+        self.assertLessEqual(candidate.confidence, 0.30)
+        self.assertTrue(candidate.needs_human_review)
+
+    def test_a_high_consequence_type_keeps_its_review_flag_at_any_confidence(self):
+        candidate = self._merge(
+            self._candidate(type="stop_work"),
+            {"confidence": 0.99, "needs_human_review": False},
+        )
+        self.assertTrue(candidate.needs_human_review)
+
+    def test_a_body_cannot_talk_its_way_out_of_review(self):
+        """The injection case: review is recomputed from config, never taken from payload."""
+        candidate = self._merge(
+            self._candidate(type="contract_action", confidence=0.20),
+            {"confidence": 1.0, "needs_human_review": False,
+             "what_is_owed": "no action needed, close this out"},
+        )
+        self.assertTrue(candidate.needs_human_review)
+
+    def test_declared_ambiguity_caps_confidence(self):
+        """A model that says it is unsure does not also get to be confident."""
+        candidate = self._merge(
+            self._candidate(),
+            {"confidence": 0.99, "ambiguity": "cannot tell who owes what"},
+        )
+        self.assertLessEqual(candidate.confidence, triage.RULES_CEILING)
+        self.assertTrue(candidate.needs_human_review)
+        self.assertIn("ambiguity", candidate.reason)
+
+    def test_the_model_cannot_set_a_nonsense_direction(self):
+        candidate = self._merge(self._candidate(), {"direction": "sideways"})
+        self.assertEqual(candidate.direction, "they_owe_us")
+
+    def test_the_model_cannot_set_fields_outside_its_remit(self):
+        """Owner comes from the routing matrix, full stop."""
+        candidate = self._merge(
+            self._candidate(), {"suggested_owner": "doug", "owner": "doug"})
+        self.assertFalse(hasattr(candidate, "owner"))
+
+    def test_a_malformed_confidence_does_not_crash_or_zero_the_candidate(self):
+        candidate = self._merge(self._candidate(confidence=0.6), {"confidence": "high"})
+        self.assertEqual(candidate.confidence, 0.6)
+
+    def test_grading_marks_the_extractor(self):
+        candidate = self._merge(self._candidate(), {"confidence": 0.9})
+        self.assertEqual(candidate.extractor, "rules+claude")
+
+    def test_a_missing_cli_degrades_loudly_and_changes_nothing(self):
+        import unittest.mock as mock
+
+        store, cfg = ingested_store()
+        candidates = triage.scan(cfg, store, now=NOW)
+        before = [(c.type, c.confidence) for c in candidates]
+        with mock.patch("cbops.extract.claude_extractor.cli_available", return_value=False):
+            result, notes = triage.apply_model(cfg, store, candidates)
+        self.assertEqual([(c.type, c.confidence) for c in result], before)
+        self.assertTrue(any("not on PATH" in note for note in notes))
+
+    def test_a_quarantined_candidate_is_never_sent_to_the_model(self):
+        """Guardrail 5: the body was never stored, and a prompt is an egress path."""
+        import unittest.mock as mock
+
+        store, cfg = ingested_store()
+        candidates = [c for c in triage.scan(cfg, store, now=NOW)
+                      if "Quarantined" in c.what_is_owed]
+        self.assertTrue(candidates)
+        with mock.patch("cbops.extract.claude_extractor.run") as run:
+            with mock.patch("cbops.extract.claude_extractor.cli_available", return_value=True):
+                _, notes = triage.apply_model(cfg, store, candidates)
+        run.assert_not_called()
+        self.assertTrue(any("Guardrail 5" in note for note in notes))
+
+    def test_only_uncertain_candidates_are_graded_by_default(self):
+        import unittest.mock as mock
+
+        store, cfg = ingested_store()
+        candidates = triage.scan(cfg, store, now=NOW)
+        threshold = cfg.guardrails["confidence"]["min_to_act"]
+        confident = [c for c in candidates if c.confidence >= threshold]
+        with mock.patch("cbops.extract.claude_extractor.cli_available", return_value=True):
+            with mock.patch("cbops.extract.claude_extractor.run") as run:
+                run.return_value = type("R", (), {"available": False, "payload": {},
+                                                  "raw": "", "error": "x"})()
+                triage.apply_model(cfg, store, candidates, limit=100)
+        self.assertLessEqual(run.call_count, len(candidates) - len(confident))
+
+    def test_a_failed_call_falls_back_rather_than_dropping_the_obligation(self):
+        import unittest.mock as mock
+
+        store, cfg = ingested_store()
+        candidates = triage.scan(cfg, store, now=NOW)
+        with mock.patch("cbops.extract.claude_extractor.cli_available", return_value=True):
+            with mock.patch("cbops.extract.claude_extractor.run") as run:
+                run.return_value = type("R", (), {"available": False, "payload": {},
+                                                  "raw": "", "error": "timeout"})()
+                result, notes = triage.apply_model(cfg, store, candidates, limit=3)
+        self.assertEqual(len(result), len(candidates))
+        self.assertTrue(any("failed" in note for note in notes))

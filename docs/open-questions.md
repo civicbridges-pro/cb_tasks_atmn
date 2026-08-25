@@ -105,6 +105,23 @@ That is the correct behavior, and it is also avoidable: populating the counterpa
 from Zoho removes a whole category of triage-queue traffic. Worth doing before Phase 1 goes
 live rather than after.
 
+## 11. What are the actual compliance dates?
+
+`config/compliance.yaml` tracks seven items and every one of them has `expires_at:
+TODO_CONFIRM`, so `./cb compliance` currently reports seven UNKNOWN rows and exits non-zero.
+
+That is the correct behavior and it is also the single cheapest thing on this list to fix.
+Each row needs an expiration date, a link to the current certificate, and a last-verified
+date. Thirty minutes of somebody's time removes a category of tail risk that has nothing to
+do with the rest of this program.
+
+The brief also flags one specifically: **the entity name on the workers comp policy must
+match the contracting entity exactly.** A mismatch means the coverage may not answer when it
+is needed, and nobody discovers that until it matters. Confirm the exact legal name.
+
+Also confirm which states have registrations. The calendar has one row for all of them,
+which is wrong: they renew on different dates and one row cannot carry several.
+
 ## 8. Two escalation paths terminate at the backup
 
 Brief §7 lists these:

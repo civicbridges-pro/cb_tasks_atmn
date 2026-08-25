@@ -1,0 +1,115 @@
+# The compliance calendar.
+#
+# Every item here is date driven, catastrophic if missed, and trivially automatable. That
+# combination is rare and it is why the brief says build this early: it is the cheapest
+# tail-risk reduction in the whole program, and it does not depend on the mail path, on
+# Zoho, or on anything else being decided first.
+#
+# An item with no `expires_at` is NOT healthy. It is unknown, which is the most dangerous
+# state on this page: an expired registration and an unrecorded one look identical from
+# here, and only one of them is survivable. `./cb compliance` reports unknown as a finding.
+#
+# `consequence` is not decoration. It is what makes somebody act on a row in a report, so
+# write what actually happens, not "non-compliance".
+
+defaults:
+  renewal_lead_days: 60          # start the clock this far out unless an item overrides
+  owner: anna                    # every item still names its own owner explicitly
+
+items:
+  sam_registration:
+    name: SAM.gov entity registration
+    authority: GSA / SAM.gov
+    owner: anna
+    cadence: annual
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 90
+    verify_url: https://sam.gov
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      An expired SAM registration makes the company ineligible for award and stops payment
+      on existing contracts. Renewal requires notarized documents and can take weeks, so
+      90 days of lead time is the minimum that is actually safe.
+
+  uei_and_cage:
+    name: UEI and CAGE code
+    authority: SAM.gov / DLA CAGE program
+    owner: anna
+    cadence: with SAM renewal
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 90
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      Tied to the SAM record. A lapse here breaks invoicing and WAWF submission, which
+      shows up as unexplained non-payment rather than as a compliance alert.
+
+  wosb_certification:
+    name: WOSB certification
+    authority: SBA
+    owner: anna
+    cadence: annual attestation, recertification every 3 years
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 90
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      Lapsing removes eligibility for WOSB set-aside awards, which is a whole category of
+      pipeline disappearing with no notification. Any set-aside bid submitted while lapsed
+      is a misrepresentation risk, not merely an ineligible bid.
+
+  dnb_profile:
+    name: Dun and Bradstreet profile
+    authority: D&B
+    owner: anna
+    cadence: annual review
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 30
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      A stale profile causes credit and responsibility determinations to come back wrong,
+      usually discovered during a source selection when it is too late to fix.
+
+  general_liability_insurance:
+    name: General liability insurance
+    authority: carrier
+    owner: amanda
+    cadence: annual
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 45
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      Certificates of insurance are a condition of award on many contracts. A lapse can
+      stop work on a delivery order and is a default risk, not a paperwork problem.
+
+  workers_comp:
+    name: Workers compensation coverage
+    authority: carrier / state
+    owner: amanda
+    cadence: annual
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 45
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      Statutory requirement. The brief also flags an open question about the entity name on
+      the policy matching the contracting entity: a mismatch means the coverage may not
+      answer when it is needed. Confirm the exact legal name.
+    notes: TODO_CONFIRM entity name on the policy must match the contracting entity exactly
+
+  state_registrations:
+    name: State business registrations
+    authority: state secretaries of state
+    owner: anna
+    cadence: annual
+    expires_at: TODO_CONFIRM
+    renewal_lead_days: 45
+    evidence: TODO_CONFIRM
+    last_verified: TODO_CONFIRM
+    consequence: >
+      Administrative dissolution for a missed annual report is quiet, retroactive, and
+      invalidates the entity's standing to contract. Reinstatement is slow.
+    notes: TODO_CONFIRM which states; one row per state once the list is known

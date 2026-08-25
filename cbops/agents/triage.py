@@ -353,7 +353,13 @@ def _due_for(cfg: Config, summary: dict[str, Any], obligation_type: str,
     commitments = summary.get("commitments") or []
     for commitment in commitments:
         if commitment.get("due_at"):
-            return commitment["due_at"], f"stated in the message: {commitment['due_text']!r}"
+            return commitment["due_at"], f"we committed to it: {commitment['due_text']!r}"
+
+    # A date the counterparty asked us to hit beats anything computed. They wrote it, so it
+    # is not arguable, and it is what they will measure us against.
+    requested = summary.get("requested_deadline") or {}
+    if requested.get("at"):
+        return requested["at"], f"they asked for it: {requested.get('text')!r}"
 
     close = summary.get("solicitation_close") or {}
     if close.get("at"):
@@ -377,6 +383,175 @@ def _due_for(cfg: Config, summary: dict[str, Any], obligation_type: str,
     if not coverage.known:
         basis += " (coverage unconfirmed, wall clock)"
     return due.isoformat(), basis
+
+
+# ---------------------------------------------------------------------------
+# The model layer
+# ---------------------------------------------------------------------------
+
+# What the model is allowed to change. Everything else about a candidate is structural and
+# stays under the deterministic layer's control.
+MODEL_MAY_SET = {"type", "what_is_owed", "direction", "due_at", "due_basis", "confidence"}
+
+
+def apply_model(cfg: Config, store: Store, candidates: list[Candidate],
+                limit: int = 25, everything: bool = False) -> tuple[list[Candidate], list[str]]:
+    """Grade candidates with the headless Claude layer. Returns (candidates, notes).
+
+    By default this runs only where the deterministic layer is unsure: candidates below the
+    action threshold, and types that always need a human anyway. That is where a model earns
+    its cost. Spending a subprocess on a message whose lane was never in doubt buys nothing.
+
+    Three things the model is structurally unable to do, enforced here rather than asked for
+    in the prompt, because a prompt is a request and this is a guarantee:
+
+    1.  It cannot clear human review on stop_work, contract_action, or award.
+    2.  It cannot invent an owner. Owners come from the routing matrix, full stop.
+    3.  It cannot raise confidence past the ceiling for a type it also flagged as ambiguous.
+
+    That last one matters because the message body is untrusted external text. A message
+    that tries to talk its way out of review moves *toward* a human, never away.
+    """
+    from ..extract import claude_extractor
+    from ..extract import rules as rules_module
+
+    notes: list[str] = []
+    if not claude_extractor.cli_available():
+        notes.append(
+            "the claude CLI is not on PATH, so every verdict below is deterministic only. "
+            "Confidence is capped at the rules ceiling and nothing was graded."
+        )
+        return candidates, notes
+
+    threshold = float(
+        (cfg.guardrails.get("confidence", {}) or {}).get("min_to_act", 0.85)
+    )
+    always_human = set(
+        (cfg.guardrails.get("confidence", {}) or {}).get("always_human_review", []) or []
+    )
+
+    if everything:
+        targets = list(candidates)
+    else:
+        targets = [
+            candidate for candidate in candidates
+            if candidate.confidence < threshold or candidate.type in always_human
+        ]
+    skipped = len(candidates) - len(targets)
+
+    ungraded = 0
+    if len(targets) > limit:
+        ungraded = len(targets) - limit
+        notes.append(
+            f"{len(targets)} candidate(s) qualified for grading and the limit is {limit}, so "
+            f"the {limit} least confident were graded and {ungraded} kept their deterministic "
+            "verdict. Raise --model-limit to cover the rest."
+        )
+        targets.sort(key=lambda candidate: candidate.confidence)
+        targets = targets[:limit]
+
+    graded = 0
+    failed = 0
+    quarantined = 0
+    for candidate in targets:
+        if candidate.confidence == 0.0 and "Quarantined" in candidate.what_is_owed:
+            # Guardrail 5: the body never left the quarantine, so there is nothing to send.
+            quarantined += 1
+            continue
+        rows = store.query("SELECT * FROM messages WHERE id = ?", (candidate.message_id,))
+        if not rows:
+            continue
+        message = rows[0]
+        summary = rules_module.summarize(
+            cfg, message["body_text"] or "", dt.datetime.now(dt.timezone.utc),
+            message["direction"], (message["counterparty_class"] or "") == "internal",
+        )
+        try:
+            context = claude_extractor.message_context(cfg, message, summary)
+        except ValueError:
+            continue
+
+        result = claude_extractor.run(
+            "triage-extract", context, store=store, actor="triage.model"
+        )
+        if not result.available:
+            failed += 1
+            continue
+        graded += 1
+        _merge_model_verdict(cfg, candidate, result.payload, always_human)
+
+    if graded:
+        notes.append(
+            f"{graded} candidate(s) graded by the model. {skipped} were already clear enough "
+            "to skip."
+        )
+    if quarantined:
+        notes.append(
+            f"{quarantined} quarantined candidate(s) were never sent to the model. "
+            "Guardrail 5: the body was not stored, and a prompt is an egress path."
+        )
+    if failed:
+        notes.append(
+            f"{failed} model call(s) failed and fell back to the deterministic verdict. "
+            "A failed grade never becomes an absent obligation."
+        )
+    if not graded and not failed and not quarantined:
+        notes.append(
+            "no candidate needed grading: every one was already above the action threshold."
+        )
+    return candidates, notes
+
+
+def _merge_model_verdict(cfg: Config, candidate: Candidate, payload: dict[str, Any],
+                         always_human: set[str]) -> None:
+    """Fold one model verdict into a candidate, under the constraints above."""
+    candidate.extractor = "rules+claude"
+
+    routed_types = {rule.get("type") for rule in cfg.routing_rules}
+    ledger_types = routed_types | {"quote_request", "rfi", "internal_request", "vendor_chase"}
+
+    proposed = payload.get("type")
+    if proposed in ledger_types and proposed != candidate.type:
+        candidate.reason += f"; model reclassified from {candidate.type} to {proposed}"
+        candidate.type = proposed
+
+    if payload.get("has_obligation") is False:
+        # The model can withdraw a finding, but never silently. It becomes a low-confidence
+        # item for a human rather than vanishing, because a wrongly withdrawn obligation is
+        # invisible and a wrongly kept one costs somebody two seconds.
+        candidate.confidence = min(candidate.confidence, 0.30)
+        candidate.needs_human_review = True
+        candidate.reason += "; model found no obligation here, kept for a human to confirm"
+        return
+
+    for field in ("what_is_owed", "direction", "due_at", "due_basis"):
+        value = payload.get(field)
+        if not value or field not in MODEL_MAY_SET:
+            continue
+        if field == "direction" and value not in ("we_owe_them", "they_owe_us"):
+            continue
+        setattr(candidate, field, value)
+
+    try:
+        model_confidence = float(payload.get("confidence", candidate.confidence))
+    except (TypeError, ValueError):
+        model_confidence = candidate.confidence
+
+    ambiguous = bool(payload.get("ambiguity")) or bool(payload.get("needs_human_review"))
+    if ambiguous:
+        # A model that says it is unsure does not also get to be confident.
+        model_confidence = min(model_confidence, RULES_CEILING)
+    candidate.confidence = round(max(0.05, min(1.0, model_confidence)), 2)
+
+    # Recomputed from config, never taken from the payload, so no message body can talk its
+    # way out of review.
+    candidate.needs_human_review = (
+        cfg.needs_human_review(candidate.type, candidate.confidence)
+        or candidate.type in always_human
+        or ambiguous
+    )
+    if payload.get("ambiguity"):
+        candidate.reason += f"; model flagged ambiguity: {str(payload['ambiguity'])[:120]}"
 
 
 def scan(cfg: Config, store: Store, now: dt.datetime | None = None,

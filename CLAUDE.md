@@ -110,6 +110,9 @@ and 3. Resist jumping to autonomy.
   Add `--commit` to persist, which requires phase 1 to be declared.
 - `./cb owed` answers "what does this company owe, to whom, by when". That sentence is the
   Phase 1 exit test, so it is one command.
+- `./cb compliance` is the date-driven calendar: SAM, WOSB, D&B, insurance, workers comp,
+  state registrations. It needs no mail and no decisions, so it can run from day one. An
+  item with no recorded date is reported as unknown, never as healthy.
 - `./cb selfcheck` checks whether the pipeline handled the captured mail correctly. Run it
   before reading any report: a report built on missing Sent mail is confidently empty.
 - `./cb sample` and `./cb score` measure whether the findings are true, on real mail, with

@@ -14,6 +14,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import compliance as compliance_mod
 from . import config as config_mod
 from . import fixtures as fixtures_mod
 from . import ledger_view, pipeline
@@ -111,7 +112,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     print("\nextraction:")
     from .extract import claude_extractor
-    print(f"  claude CLI: {'found' if claude_extractor.cli_available() else 'NOT FOUND'}")
+    available = claude_extractor.cli_available()
+    print(f"  claude CLI: {'found' if available else 'NOT FOUND'}")
+    print("  model grading: "
+          + ("available via `./cb triage --model`" if available
+             else "unavailable; triage runs deterministic only, capped below the act threshold"))
     for name in ("triage-extract", "promise-scan"):
         path = REPO_ROOT / "prompts" / f"{name}.md"
         print(f"  prompt {name}: {'ok' if path.exists() else 'MISSING'}")
@@ -422,13 +427,21 @@ def cmd_triage(args: argparse.Namespace) -> int:
 
     with _open_store(args) as store:
         candidates = triage.scan(cfg, store, since=args.since)
+
+        model_notes: list[str] = []
+        if args.model or args.model_all:
+            candidates, model_notes = triage.apply_model(
+                cfg, store, candidates, limit=args.model_limit, everything=args.model_all)
+
         routed = router.build(cfg, store, candidates, persist=args.commit)
 
         if not routed:
             print("no new obligations found")
             return 0
 
-        report = _routed_report(cfg, routed, committed=args.commit)
+        report = _routed_report(cfg, routed, committed=args.commit,
+                                graded_by_model=bool(model_notes))
+        report.notes.extend(model_notes)
         text = to_markdown(report)
         path = _write_report(store, report, text, args.out)
         print(text if not args.quiet else
@@ -444,7 +457,8 @@ def cmd_triage(args: argparse.Namespace) -> int:
     return 0
 
 
-def _routed_report(cfg: Config, routed: list, committed: bool):
+def _routed_report(cfg: Config, routed: list, committed: bool,
+                   graded_by_model: bool = False):
     from .reports.render import Report
 
     report = Report(
@@ -475,9 +489,12 @@ def _routed_report(cfg: Config, routed: list, committed: bool):
         "routes to a human rather than guessing a person.",
         "`review` covers low confidence plus every stop-work, contract action, and award, "
         "which always reach a human whatever the confidence.",
-        "Deterministic classification only. Run with the model layer to raise or reject "
-        "these; a term list alone can never clear the action threshold.",
     ]
+    if not graded_by_model:
+        report.notes.append(
+            "Deterministic classification only. Run `--model` to grade the uncertain ones; "
+            "a term list alone can never clear the action threshold."
+        )
     return report
 
 
@@ -562,6 +579,30 @@ def cmd_digest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compliance(args: argparse.Namespace) -> int:
+    """The compliance calendar. Needs no mail, no store, and no decisions."""
+    cfg = _load_config()
+    report = compliance_mod.run(cfg)
+    text = to_markdown(report)
+
+    if args.commit:
+        _require_phase_1(cfg, "compliance --commit")
+    with _open_store(args) as store:
+        created = compliance_mod.sync(cfg, store, persist=args.commit)
+        path = _write_report(store, report, text, args.out)
+        print(text if not args.quiet else
+              f"compliance: {report.metrics['expired (target zero)']} expired, "
+              f"{report.metrics['date not recorded (target zero)']} undated -> {path}")
+        if created:
+            print(
+                f"\n{len(created)} compliance obligation(s) "
+                f"{'created' if args.commit else 'would be created'}",
+                file=sys.stderr,
+            )
+    unknown = report.metrics["date not recorded (target zero)"]
+    return 1 if (report.metrics["expired (target zero)"] or unknown) else 0
+
+
 def cmd_owed(args: argparse.Namespace) -> int:
     """The Phase 1 success test: what does this company owe, to whom, by when."""
     cfg = _load_config()
@@ -594,10 +635,14 @@ def cmd_phase1(args: argparse.Namespace) -> int:
         routed = router.build(cfg, work, candidates, persist=True)
         triage_report = _routed_report(cfg, routed, committed=args.commit)
 
+        # The calendar is not driven by mail, so it is synced here rather than triaged.
+        compliance_mod.sync(cfg, work, persist=True)
+
         actions = chaser.plan(cfg, work)
         chaser.apply(cfg, work, actions)
 
-        reports = [triage_report, auditor.run(cfg, work), ledger_view.run(cfg, work)]
+        reports = [triage_report, compliance_mod.run(cfg), auditor.run(cfg, work),
+                   ledger_view.run(cfg, work)]
         reports.extend(personal.everyone(cfg, work))
         reports.append(exec_rollup.run(cfg, work))
 
@@ -768,6 +813,15 @@ def build_parser() -> argparse.ArgumentParser:
     triage_cmd.add_argument("--commit", action="store_true",
                             help="write to the ledger; requires phase 1")
     triage_cmd.add_argument("--since", help="only messages sent on or after this ISO date")
+    triage_cmd.add_argument(
+        "--model", action="store_true",
+        help="grade uncertain candidates with the headless Claude layer")
+    triage_cmd.add_argument(
+        "--model-all", action="store_true",
+        help="grade every candidate, not only the uncertain ones")
+    triage_cmd.add_argument(
+        "--model-limit", type=int, default=25,
+        help="cap model calls in one run (default 25); each is a subprocess")
     triage_cmd.add_argument("--out")
     triage_cmd.add_argument("--quiet", action="store_true")
     triage_cmd.set_defaults(func=cmd_triage)
@@ -793,6 +847,14 @@ def build_parser() -> argparse.ArgumentParser:
     digest_cmd.add_argument("--include-empty", action="store_true",
                             help="print digests with nothing on them")
     digest_cmd.set_defaults(func=cmd_digest)
+
+    comply = sub.add_parser(
+        "compliance", help="the compliance calendar; non-zero exit on expired or undated")
+    comply.add_argument("--commit", action="store_true",
+                        help="create ledger obligations; requires phase 1")
+    comply.add_argument("--out")
+    comply.add_argument("--quiet", action="store_true")
+    comply.set_defaults(func=cmd_compliance)
 
     owed = sub.add_parser(
         "owed", help="what this company owes, to whom, by when: the Phase 1 success test")

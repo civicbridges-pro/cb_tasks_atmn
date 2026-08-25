@@ -99,6 +99,7 @@ class ValidatorTest(unittest.TestCase):
             sla=copy.deepcopy(cfg.sla), guardrails=copy.deepcopy(cfg.guardrails),
             naming=copy.deepcopy(cfg.naming),
             counterparties=copy.deepcopy(cfg.counterparties),
+            compliance=copy.deepcopy(cfg.compliance),
         )
         mutate(getattr(clone, section))
         return config_mod.validate(clone)

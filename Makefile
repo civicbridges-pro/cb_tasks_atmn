@@ -1,9 +1,10 @@
-.PHONY: help test doctor selfcheck phase0 phase1 ingest-fixtures clean
+.PHONY: help test doctor selfcheck compliance phase0 phase1 ingest-fixtures clean
 
 help:
 	@echo "make test              run the suite"
 	@echo "make doctor            validate config, schema, guardrails, environment"
 	@echo "make selfcheck         data-quality checks on whatever mail is captured"
+	@echo "make compliance        the compliance calendar; needs no mail at all"
 	@echo "make ingest-fixtures   load the fixture corpus into a fresh store"
 	@echo "make phase0            ingest fixtures then run every Phase 0 report"
 	@echo "make phase1            preview the whole Phase 1 ledger loop, writing nothing"
@@ -17,6 +18,10 @@ doctor:
 
 selfcheck:
 	./cb selfcheck
+
+# The one target that works on a fresh checkout with no mail ingested.
+compliance:
+	-./cb compliance
 
 ingest-fixtures:
 	rm -rf var/ledger.db

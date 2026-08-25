@@ -27,7 +27,7 @@ fragmentation. See `docs/architecture.md`.
 ./cb phase0                                          # the four leak reports plus baseline
 ./cb phase1                                          # preview the ledger, writing nothing
 ./cb owed                                            # what we owe, to whom, by when
-make test                                            # 215 tests
+make test                                            # 261 tests
 ```
 
 Reports are written to `var/reports/YYYY-MM-DD/`. The fixture corpus is synthetic and safe
@@ -49,9 +49,11 @@ to run against, and it exercises every failure mode the reports look for.
 | `./cb score <worksheet.csv>` | precision measured, recall estimated, disagreements listed |
 | `./cb fixture <thread-key>` | export a real thread as an anonymized regression test |
 | `./cb triage` | classify messages into owned obligations with clocks (preview) |
+| `./cb triage --model` | grade the uncertain ones with the headless Claude layer |
 | `./cb chase` | follow-ups and escalations due now (preview) |
 | `./cb audit` | thirteen ledger consistency checks, non-zero exit on a critical |
 | `./cb digest` | daily personal digests and the exec rollup |
+| `./cb compliance` | the compliance calendar; non-zero exit on expired or undated |
 | `./cb owed` | what this company owes, to whom, by when |
 | `./cb phase1` | the whole ledger loop; `--commit` requires phase 1 declared |
 | `./cb health` | sync freshness, exits non-zero when a mailbox has stalled |
@@ -78,7 +80,7 @@ Phase discipline is real here. Nothing from a later phase is half-built.
 - `cbops/validate/` self-check, stratified sampling, and precision/recall scoring
 - `cbops/fixtures.py` export a real thread as an anonymized regression test
 - `config/` the routing matrix, SLA clocks, guardrails, naming, counterparty classes
-- `tests/` 215 tests, and a fixture corpus that is the real asset
+- `tests/` 261 tests, and a fixture corpus that is the real asset
 
 **Built, gated behind preview (Phase 1):**
 
@@ -88,6 +90,7 @@ Phase discipline is real here. Nothing from a later phase is half-built.
 - `cbops/agents/auditor.py` thirteen consistency checks; reports, never repairs
 - `cbops/digests/` daily personal digests and the exec rollup
 - `cbops/ledger_view.py` `./cb owed`, which is the Phase 1 exit test as one command
+- `cbops/compliance.py` the compliance calendar, which depends on nothing else being decided
 
 **Not built, by design:** the drafter (Phase 2), Zoho and Projects writeback (Phase 2), the
 contract-lifecycle chain and health dashboard (Phase 3), and any autonomous send (Phase 4).
@@ -137,6 +140,24 @@ person's digest is how a team learns to stop reading the digest. `they_owe_us` o
 **Chaser** advances the cadence and escalates when it is spent. A known external deadline
 always beats the fixed interval. `exhausted` is not a bug: it means chasing is over and
 somebody has to decide something.
+
+**The model layer** grades what the deterministic layer is unsure about. `./cb triage
+--model` sends only candidates below the action threshold plus the types that always need a
+human, because spending a subprocess on a message whose lane was never in doubt buys
+nothing. Three limits are enforced in code rather than requested in the prompt, since the
+message body is untrusted text somebody outside the company wrote: the model cannot clear
+human review on stop-work, contract actions or awards; it cannot invent an owner, which
+comes from the routing matrix alone; and declaring ambiguity caps its own confidence. A
+model that withdraws a finding does not delete it, it drops it to a human, because a wrongly
+withdrawn obligation is invisible and a wrongly kept one costs somebody two seconds.
+
+**The compliance calendar** is the one piece that depends on nothing: not the mail path, not
+Zoho, not a single open question. SAM, WOSB, D&B, insurance, workers comp, state
+registrations. An item with no recorded date is reported as **unknown, never as healthy**,
+because an expired registration and an unrecorded one look identical from a config file and
+only one of them is survivable. Items inside their renewal window become obligations on a
+named person's digest; items comfortably fine do not, because that is how a digest becomes
+wallpaper.
 
 **Auditor** runs thirteen checks over the ledger and its config. `critical` is reserved for
 integrity, so a failing audit means "do not trust these numbers", not "somebody is behind".
