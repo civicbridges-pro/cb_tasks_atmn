@@ -110,6 +110,11 @@ and 3. Resist jumping to autonomy.
   Add `--commit` to persist, which requires phase 1 to be declared.
 - `./cb owed` answers "what does this company owe, to whom, by when". That sentence is the
   Phase 1 exit test, so it is one command.
+- `./cb selfcheck` checks whether the pipeline handled the captured mail correctly. Run it
+  before reading any report: a report built on missing Sent mail is confidently empty.
+- `./cb sample` and `./cb score` measure whether the findings are true, on real mail, with
+  human labels. `./cb fixture <thread>` turns any disagreement into a regression test.
+  See `docs/validating-phase0.md`.
 - `make test` runs the suite. `tests/fixtures/` is the gold. Extraction quality is entirely
   a function of how many real messy examples the classifier has seen. Add every
   interesting real thread (anonymized) as a fixture.

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from . import config as config_mod
+from . import fixtures as fixtures_mod
 from . import ledger_view, pipeline
 from .agents import auditor, chaser, router, triage
 from .config import REPO_ROOT, Config, ConfigError
@@ -23,6 +24,8 @@ from .ingest import get_source
 from .ingest import telegram as telegram_ingest
 from .ingest import portals
 from .reports import PHASE0_REPORTS
+from .validate import sample as sample_mod
+from .validate import selfcheck
 from .reports.render import to_markdown
 from .store import DEFAULT_DB, Store
 
@@ -308,6 +311,84 @@ def _write_report(store: Store, report, text: str, out: str | None) -> str:
     path.write_text(text)
     store.record_report_run(report.key, report.row_count, {}, str(path))
     return str(path)
+
+
+# ---------------------------------------------------------------------------
+# validating phase 0
+# ---------------------------------------------------------------------------
+
+
+def cmd_selfcheck(args: argparse.Namespace) -> int:
+    """Did the pipeline handle this mail correctly? No human labels needed."""
+    cfg = _load_config()
+    with _open_store(args) as store:
+        report = selfcheck.run(cfg, store)
+        text = to_markdown(report)
+        path = _write_report(store, report, text, args.out)
+        print(text if not args.quiet else
+              f"selfcheck: {report.metrics['verdict']} "
+              f"({report.metrics['failures']} fail, {report.metrics['warnings']} warn) -> {path}")
+    return 1 if report.metrics.get("failures") else 0
+
+
+def cmd_sample(args: argparse.Namespace) -> int:
+    """Draw a stratified review worksheet. Half flagged, half not, shuffled."""
+    cfg = _load_config()
+    with _open_store(args) as store:
+        worksheet = sample_mod.draw(cfg, store, args.report, size=args.n, seed=args.seed)
+        if not worksheet.items:
+            print(f"nothing to sample for {args.report}: the store has no qualifying messages",
+                  file=sys.stderr)
+            return 1
+        path = Path(args.out or (REPORT_DIR / f"sample-{args.report}.csv"))
+        worksheet.write(path)
+
+        flagged = sum(1 for item in worksheet.items if item.stratum == "flagged")
+        print(f"{len(worksheet.items)} rows -> {path}")
+        print(f"  {flagged} the report flagged, {len(worksheet.items) - flagged} it did not, "
+              "shuffled together")
+        print(f"  drawn from {worksheet.populations['flagged']} flagged and "
+              f"{worksheet.populations['not_flagged']} unflagged items (seed {worksheet.seed})")
+        print(f"\n  Question for each row: {worksheet.question}")
+        print("  Fill in the `human_says` column. Add a `human_note` when the answer is "
+              "interesting or you disagree.")
+        print(f"\n  Then: ./cb score {path}")
+        print("\n  Label without looking at `system_says` first if you can. Reading the "
+              "system's answer before forming your own is how a review agrees with itself.")
+    return 0
+
+
+def cmd_score(args: argparse.Namespace) -> int:
+    """Grade a returned worksheet: precision measured, recall estimated."""
+    scores, disagreements = sample_mod.read_labels(Path(args.worksheet))
+    if not scores:
+        print(f"no scoreable rows in {args.worksheet}", file=sys.stderr)
+        return 2
+    report = sample_mod.score_report(scores, disagreements)
+    text = to_markdown(report)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(text)
+        print(f"{report.row_count} report(s) scored -> {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_fixture(args: argparse.Namespace) -> int:
+    """Export a real thread as an anonymized fixture, so a disagreement becomes a test."""
+    cfg = _load_config()
+    with _open_store(args) as store:
+        try:
+            written = fixtures_mod.export_thread(
+                cfg, store, args.thread, Path(args.out), prefix=args.name)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    for path in written:
+        print(path)
+    print(fixtures_mod.WARNING, file=sys.stderr)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +735,33 @@ def build_parser() -> argparse.ArgumentParser:
     phase0 = sub.add_parser("phase0", help="run every Phase 0 report")
     phase0.add_argument("--out", help="output directory")
     phase0.set_defaults(func=cmd_phase0)
+
+    check = sub.add_parser(
+        "selfcheck", help="data-quality checks on captured mail; no human labels needed")
+    check.add_argument("--out")
+    check.add_argument("--quiet", action="store_true")
+    check.set_defaults(func=cmd_selfcheck)
+
+    sample_cmd = sub.add_parser(
+        "sample", help="draw a stratified review worksheet for a report")
+    sample_cmd.add_argument("--report", required=True, choices=sorted(sample_mod.QUESTIONS))
+    sample_cmd.add_argument("-n", type=int, default=40, help="rows in the worksheet")
+    sample_cmd.add_argument("--seed", type=int, default=20260825,
+                            help="redraw the same sample for a second reviewer")
+    sample_cmd.add_argument("--out", help="CSV path")
+    sample_cmd.set_defaults(func=cmd_sample)
+
+    score_cmd = sub.add_parser("score", help="grade a labeled worksheet")
+    score_cmd.add_argument("worksheet")
+    score_cmd.add_argument("--out")
+    score_cmd.set_defaults(func=cmd_score)
+
+    fixture = sub.add_parser(
+        "fixture", help="export a real thread as an anonymized test fixture")
+    fixture.add_argument("thread", help="thread key, from the `thread` column of any report")
+    fixture.add_argument("--out", default="tests/fixtures/mail")
+    fixture.add_argument("--name", help="filename prefix; defaults to a hash of the thread")
+    fixture.set_defaults(func=cmd_fixture)
 
     triage_cmd = sub.add_parser(
         "triage", help="classify messages into owned obligations (preview by default)")

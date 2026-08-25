@@ -1,8 +1,9 @@
-.PHONY: help test doctor phase0 phase1 ingest-fixtures clean
+.PHONY: help test doctor selfcheck phase0 phase1 ingest-fixtures clean
 
 help:
 	@echo "make test              run the suite"
 	@echo "make doctor            validate config, schema, guardrails, environment"
+	@echo "make selfcheck         data-quality checks on whatever mail is captured"
 	@echo "make ingest-fixtures   load the fixture corpus into a fresh store"
 	@echo "make phase0            ingest fixtures then run every Phase 0 report"
 	@echo "make phase1            preview the whole Phase 1 ledger loop, writing nothing"
@@ -13,6 +14,9 @@ test:
 
 doctor:
 	./cb doctor
+
+selfcheck:
+	./cb selfcheck
 
 ingest-fixtures:
 	rm -rf var/ledger.db

@@ -27,7 +27,7 @@ fragmentation. See `docs/architecture.md`.
 ./cb phase0                                          # the four leak reports plus baseline
 ./cb phase1                                          # preview the ledger, writing nothing
 ./cb owed                                            # what we owe, to whom, by when
-make test                                            # 182 tests
+make test                                            # 215 tests
 ```
 
 Reports are written to `var/reports/YYYY-MM-DD/`. The fixture corpus is synthetic and safe
@@ -44,6 +44,10 @@ to run against, and it exercises every failure mode the reports look for.
 | `./cb portal dibbs --file <f>` | parse a pasted DIBBS, WAWF, or SAM record |
 | `./cb report <name>` | run one report to stdout |
 | `./cb phase0` | run every Phase 0 report into a dated directory |
+| `./cb selfcheck` | did the pipeline handle this mail correctly? no labels needed |
+| `./cb sample --report promises` | stratified review worksheet: half flagged, half not |
+| `./cb score <worksheet.csv>` | precision measured, recall estimated, disagreements listed |
+| `./cb fixture <thread-key>` | export a real thread as an anonymized regression test |
 | `./cb triage` | classify messages into owned obligations with clocks (preview) |
 | `./cb chase` | follow-ups and escalations due now (preview) |
 | `./cb audit` | thirteen ledger consistency checks, non-zero exit on a critical |
@@ -71,8 +75,10 @@ Phase discipline is real here. Nothing from a later phase is half-built.
 - `cbops/clock.py` coverage-aware SLA math, federal holidays, backward-planned deadlines
 - `ledger/schema.sql` and `cbops/store.py` the ledger, with its invariants enforced in code
 - `cbops/reports/` the four leak reports plus baseline metrics
+- `cbops/validate/` self-check, stratified sampling, and precision/recall scoring
+- `cbops/fixtures.py` export a real thread as an anonymized regression test
 - `config/` the routing matrix, SLA clocks, guardrails, naming, counterparty classes
-- `tests/` 182 tests, and a fixture corpus that is the real asset
+- `tests/` 215 tests, and a fixture corpus that is the real asset
 
 **Built, gated behind preview (Phase 1):**
 
@@ -148,6 +154,35 @@ The exit test is one sentence, so it is one command:
 ./cb owed --contract SPE4A6-24-D-0123
 ```
 
+## Checking that it actually works
+
+The test suite proves the code runs. It says nothing about whether the reports are right
+about *your* mail, because the fixtures are synthetic. `docs/validating-phase0.md` is the
+ladder; the short version:
+
+```bash
+./cb ingest mbox /path/to/real/export --mailbox quotes@civicbridges.com
+./cb selfcheck                          # is the pipeline structurally sound on this mail?
+./cb sample --report promises -n 40     # worksheet: half flagged, half not, shuffled
+./cb score var/reports/sample-promises.csv
+./cb fixture mid:...                    # turn each disagreement into a regression test
+```
+
+`selfcheck` catches the failures that make a report *structurally* wrong rather than merely
+imprecise. The one that matters most is `outbound captured`: without the Sent folder there
+are no commitments to audit, so the Broken Promise report finds nothing and looks healthy
+doing it. A clean bill of health that means "I was not looking" is the most dangerous output
+this system can produce, so it exits non-zero instead.
+
+`sample` is stratified deliberately. A sample drawn only from findings can measure precision
+and nothing else, and it can never reveal a promise the detector walked straight past. Half
+the worksheet is items the report did **not** flag, shuffled in, so recall is measurable.
+`score` weights each stratum back to population size rather than reporting the raw ratio,
+which would flatter recall badly.
+
+Weight recall over precision on purpose: a false positive costs somebody two seconds in
+triage, a missed promise is a commitment nobody knows was made.
+
 ## Guardrails
 
 Full list in `CLAUDE.md`, machine-readable in `config/guardrails.yaml`, and asserted in
@@ -189,6 +224,7 @@ cbops/                 the pipeline
   reports/             the four leak reports plus baseline
   agents/              triage, router, chaser, auditor
   digests/             personal digests and the exec rollup
+  validate/            self-check and accuracy measurement
 config/                everything a human negotiates lives here, not in code
 ledger/                schema and migrations
 prompts/               prompt files for headless runs
@@ -200,6 +236,14 @@ var/                   local store and generated reports, not committed
 
 ## Contributing during Phase 0
 
-The highest-value contribution is fixtures. Add every interesting real thread to
-`tests/fixtures/mail/` with names, addresses, and dollar figures anonymized. Extraction
-quality is entirely a function of how many real messy examples the detectors have seen.
+The highest-value contribution is fixtures. `./cb fixture <thread-key>` exports a real thread
+into `tests/fixtures/mail/` with addresses, domains, names, contract and item numbers, money,
+and phone numbers replaced by stable fakes, reconstructed from the store so no original
+headers or attachment payloads travel with it.
+
+It cannot anonymize prose, and it says so rather than pretending: a sentence can identify a
+person by role or a customer by circumstance. **Read every exported file before committing
+it.** The tool does the mechanical part; the judgment is yours.
+
+Extraction quality is entirely a function of how many real messy examples the detectors have
+seen, so every disagreement found while scoring a worksheet belongs here as a test.
