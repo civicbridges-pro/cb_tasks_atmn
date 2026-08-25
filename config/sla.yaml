@@ -79,6 +79,17 @@ types:
       Cadence is driven backward from the close date and escalates to a named human at
       the OEM, not to a shared sales alias.
 
+  quote_request:
+    # A customer asking us for a price. No response_hours on purpose: a school district
+    # gets the sled clock and a commercial customer gets the default.
+    completion_hours: 48
+    metric: quote_turnaround_hours
+    notes: >
+      Customers usually state their own date ("we need pricing by the 28th"). A stated date
+      should always beat this clock. Today the extractor only reads dates out of outbound
+      commitments and solicitation-close phrasing, so an inbound customer deadline is
+      currently missed and this fixed clock is used instead. Tracked as a known gap.
+
   purchase_order:
     response_hours: 4
     completion_hours: 24
