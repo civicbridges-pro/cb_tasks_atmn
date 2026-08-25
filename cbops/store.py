@@ -67,6 +67,19 @@ class Store:
         )
         self.db.commit()
 
+    def snapshot(self) -> "Store":
+        """An in-memory copy of this store.
+
+        Preview mode writes to a snapshot and throws it away. Without this, previewing the
+        ledger produces a triage table and a set of empty digests, which is the opposite of
+        useful: the digests are what a person actually has to judge before agreeing to turn
+        Phase 1 on.
+        """
+        clone = Store(":memory:")
+        self.db.backup(clone.db)
+        clone.db.execute("PRAGMA foreign_keys = ON")
+        return clone
+
     def close(self) -> None:
         self.db.close()
 

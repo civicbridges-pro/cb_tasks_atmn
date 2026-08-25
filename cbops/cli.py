@@ -15,8 +15,10 @@ import sys
 from pathlib import Path
 
 from . import config as config_mod
-from . import pipeline
+from . import ledger_view, pipeline
+from .agents import auditor, chaser, router, triage
 from .config import REPO_ROOT, Config, ConfigError
+from .digests import exec_rollup, personal
 from .ingest import get_source
 from .ingest import telegram as telegram_ingest
 from .ingest import portals
@@ -309,6 +311,239 @@ def _write_report(store: Store, report, text: str, out: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# phase 1: ledger
+# ---------------------------------------------------------------------------
+
+
+def _require_phase_1(cfg: Config, what: str) -> None:
+    """Persisting to the ledger is Phase 1 behavior, so it needs Phase 1 to be declared.
+
+    Preview mode needs no permission because it writes nothing. This is the guard that lets
+    the whole Phase 1 ledger be inspected against real mail while the deployment is still
+    the Phase 0 observatory, which is the opposite of building Phase N+1 on faith.
+    """
+    if cfg.phase < 1:
+        raise ConfigError(
+            f"{what} writes to the ledger, which is Phase 1 behavior, and "
+            f"config/guardrails.yaml declares phase {cfg.phase}.\n\n"
+            "  Run without --commit to preview exactly what would be written.\n"
+            "  When the preview looks right on real mail, set `phase: 1` in "
+            "config/guardrails.yaml.\n\n"
+            "Phase 1 still sends nothing: outbound stays disabled until Phase 2."
+        )
+
+
+def cmd_triage(args: argparse.Namespace) -> int:
+    """Classify messages into obligations and route each to one named human."""
+    cfg = _load_config()
+    if args.commit:
+        _require_phase_1(cfg, "triage --commit")
+
+    with _open_store(args) as store:
+        candidates = triage.scan(cfg, store, since=args.since)
+        routed = router.build(cfg, store, candidates, persist=args.commit)
+
+        if not routed:
+            print("no new obligations found")
+            return 0
+
+        report = _routed_report(cfg, routed, committed=args.commit)
+        text = to_markdown(report)
+        path = _write_report(store, report, text, args.out)
+        print(text if not args.quiet else
+              f"{report.row_count} obligation(s) {'committed' if args.commit else 'previewed'}"
+              f" -> {path}")
+
+        if not args.commit:
+            print(
+                "\nPreview only. Nothing was written to the ledger. Re-run with --commit "
+                "once phase 1 is declared in config/guardrails.yaml.",
+                file=sys.stderr,
+            )
+    return 0
+
+
+def _routed_report(cfg: Config, routed: list, committed: bool):
+    from .reports.render import Report
+
+    report = Report(
+        key="triage",
+        title="Triage and routing" + ("" if committed else " (preview)"),
+        subtitle=(
+            "Every message that creates an obligation, with one named owner and a clock. "
+            + ("Written to the ledger." if committed else
+               "Nothing was written: this is what the ledger would contain.")
+        ),
+        columns=["type", "owner", "status", "direction", "counterparty", "what_is_owed",
+                 "due_at", "respond_by", "next_chase", "confidence", "review", "page"],
+        rows=[item.as_row() for item in routed],
+    )
+    unowned = sum(1 for item in routed if item.owner == config_mod.TRIAGE_QUEUE)
+    review = sum(1 for item in routed if item.candidate.needs_human_review)
+    paged = [p for item in routed for p in item.page_now]
+    report.metrics = {
+        "obligations": len(routed),
+        "to the triage queue (no confident owner)": unowned,
+        "needing human review": review,
+        "waiting on someone external": sum(
+            1 for item in routed if item.status == "waiting_external"),
+        "pages": ", ".join(sorted(set(paged))) or "none",
+    }
+    report.notes = [
+        "An obligation in the triage queue has no confident owner. Guardrail 8: the system "
+        "routes to a human rather than guessing a person.",
+        "`review` covers low confidence plus every stop-work, contract action, and award, "
+        "which always reach a human whatever the confidence.",
+        "Deterministic classification only. Run with the model layer to raise or reject "
+        "these; a term list alone can never clear the action threshold.",
+    ]
+    return report
+
+
+def cmd_chase(args: argparse.Namespace) -> int:
+    """Advance the cadence on everything in waiting_external. Sends nothing."""
+    cfg = _load_config()
+    if args.commit:
+        _require_phase_1(cfg, "chase --commit")
+
+    with _open_store(args) as store:
+        actions = chaser.plan(cfg, store)
+        if args.commit:
+            chaser.apply(cfg, store, actions)
+
+        from .reports.render import Report
+        report = Report(
+            key="chase",
+            title="Chase cadence" + ("" if args.commit else " (preview)"),
+            subtitle=(
+                "Follow-ups and escalations due now. Phase 1 records them and a human sends "
+                "them: approve-and-send drafts arrive in Phase 2."
+            ),
+            columns=["action", "obligation", "owner", "escalate_to", "chase", "counterparty",
+                     "what_is_owed", "next_chase", "reason"],
+            rows=[action.as_row() for action in actions],
+        )
+        report.metrics = {
+            "chases due": sum(1 for a in actions if a.action == "chase"),
+            "escalations": sum(1 for a in actions if a.action == "escalate"),
+            "escalation paths exhausted": sum(1 for a in actions if a.action == "exhausted"),
+        }
+        report.notes = [
+            "A chase driven by an external deadline is planned backward from it. A fixed "
+            "interval is the fallback, and the audit report lists where it is being used.",
+            "`exhausted` means chasing is over. That obligation needs a decision, not "
+            "another follow-up.",
+        ]
+        text = to_markdown(report)
+        path = _write_report(store, report, text, args.out)
+        print(text if not args.quiet else f"{len(actions)} action(s) -> {path}")
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Nightly consistency checks. Exits non-zero on a critical finding."""
+    cfg = _load_config(strict=False)
+    with _open_store(args) as store:
+        report = auditor.run(cfg, store)
+        text = to_markdown(report)
+        path = _write_report(store, report, text, args.out)
+        print(text if not args.quiet else
+              f"audit: {report.metrics['critical']} critical, {report.metrics['high']} high"
+              f" -> {path}")
+    return 1 if report.metrics.get("critical") else 0
+
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    cfg = _load_config()
+    with _open_store(args) as store:
+        reports = []
+        if args.person:
+            reports.append(personal.run(cfg, store, args.person))
+        elif args.exec_only:
+            reports.append(exec_rollup.run(cfg, store))
+        else:
+            reports.extend(personal.everyone(cfg, store))
+            reports.append(exec_rollup.run(cfg, store))
+
+        if args.out:
+            out_dir = Path(args.out)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for report in reports:
+                path = out_dir / f"{report.key}.md"
+                path.write_text(to_markdown(report))
+                store.record_report_run(report.key, report.row_count, {}, str(path))
+                print(f"{report.key:24} {report.row_count:4} line(s) -> {path}")
+        else:
+            for report in reports:
+                if report.row_count or args.include_empty:
+                    print(to_markdown(report))
+                    print()
+    return 0
+
+
+def cmd_owed(args: argparse.Namespace) -> int:
+    """The Phase 1 success test: what does this company owe, to whom, by when."""
+    cfg = _load_config()
+    with _open_store(args) as store:
+        report = ledger_view.run(cfg, store, owner=args.owner,
+                                 counterparty=args.counterparty, contract=args.contract)
+        text = to_markdown(report)
+        path = _write_report(store, report, text, args.out)
+        print(text if not args.quiet else f"{report.row_count} open obligation(s) -> {path}")
+    return 0
+
+
+def cmd_phase1(args: argparse.Namespace) -> int:
+    """The whole Phase 1 loop. This is what cron calls once the ledger is live."""
+    cfg = _load_config()
+    if args.commit:
+        _require_phase_1(cfg, "phase1 --commit")
+
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    out_dir = Path(args.out or (REPORT_DIR / stamp))
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with _open_store(args) as store:
+        # In preview the whole loop runs against a throwaway copy, so the digests and the
+        # owed view show what they would actually contain. A preview that renders empty
+        # digests tells a reader nothing about the thing they are being asked to approve.
+        work = store if args.commit else store.snapshot()
+
+        candidates = triage.scan(cfg, work)
+        routed = router.build(cfg, work, candidates, persist=True)
+        triage_report = _routed_report(cfg, routed, committed=args.commit)
+
+        actions = chaser.plan(cfg, work)
+        chaser.apply(cfg, work, actions)
+
+        reports = [triage_report, auditor.run(cfg, work), ledger_view.run(cfg, work)]
+        reports.extend(personal.everyone(cfg, work))
+        reports.append(exec_rollup.run(cfg, work))
+
+        for report in reports:
+            path = out_dir / f"{report.key}.md"
+            path.write_text(to_markdown(report))
+            store.record_report_run(report.key, report.row_count, {"phase1": True}, str(path))
+            print(f"{report.key:24} {report.row_count:4} line(s) -> {path}")
+
+        print(f"\n{len(actions)} chase action(s) {'applied' if args.commit else 'previewed'}")
+        audit = next(r for r in reports if r.key == "audit")
+        if audit.metrics.get("critical"):
+            print(f"{audit.metrics['critical']} CRITICAL audit finding(s). "
+                  "Read audit.md before circulating anything else.", file=sys.stderr)
+            return 1
+        if not args.commit:
+            work.close()
+            print(
+                "\nPreview only. Nothing was written to the ledger: the reports above come "
+                "from a throwaway copy. Set `phase: 1` in config/guardrails.yaml and re-run "
+                "with --commit when they read correctly.",
+                file=sys.stderr,
+            )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # health and kill switch
 # ---------------------------------------------------------------------------
 
@@ -419,6 +654,51 @@ def build_parser() -> argparse.ArgumentParser:
     phase0 = sub.add_parser("phase0", help="run every Phase 0 report")
     phase0.add_argument("--out", help="output directory")
     phase0.set_defaults(func=cmd_phase0)
+
+    triage_cmd = sub.add_parser(
+        "triage", help="classify messages into owned obligations (preview by default)")
+    triage_cmd.add_argument("--commit", action="store_true",
+                            help="write to the ledger; requires phase 1")
+    triage_cmd.add_argument("--since", help="only messages sent on or after this ISO date")
+    triage_cmd.add_argument("--out")
+    triage_cmd.add_argument("--quiet", action="store_true")
+    triage_cmd.set_defaults(func=cmd_triage)
+
+    chase_cmd = sub.add_parser(
+        "chase", help="follow-ups and escalations due now (preview by default)")
+    chase_cmd.add_argument("--commit", action="store_true",
+                           help="record the advance; requires phase 1")
+    chase_cmd.add_argument("--out")
+    chase_cmd.add_argument("--quiet", action="store_true")
+    chase_cmd.set_defaults(func=cmd_chase)
+
+    audit_cmd = sub.add_parser("audit", help="ledger consistency checks")
+    audit_cmd.add_argument("--out")
+    audit_cmd.add_argument("--quiet", action="store_true")
+    audit_cmd.set_defaults(func=cmd_audit)
+
+    digest_cmd = sub.add_parser("digest", help="daily personal digests and the exec rollup")
+    digest_cmd.add_argument("--person", help="one person id from people.yaml")
+    digest_cmd.add_argument("--exec", dest="exec_only", action="store_true",
+                            help="the exec rollup only")
+    digest_cmd.add_argument("--out", help="write one file per digest into this directory")
+    digest_cmd.add_argument("--include-empty", action="store_true",
+                            help="print digests with nothing on them")
+    digest_cmd.set_defaults(func=cmd_digest)
+
+    owed = sub.add_parser(
+        "owed", help="what this company owes, to whom, by when: the Phase 1 success test")
+    owed.add_argument("--owner")
+    owed.add_argument("--counterparty")
+    owed.add_argument("--contract")
+    owed.add_argument("--out")
+    owed.add_argument("--quiet", action="store_true")
+    owed.set_defaults(func=cmd_owed)
+
+    phase1 = sub.add_parser("phase1", help="the whole Phase 1 loop (preview by default)")
+    phase1.add_argument("--commit", action="store_true", help="requires phase 1")
+    phase1.add_argument("--out", help="output directory")
+    phase1.set_defaults(func=cmd_phase1)
 
     health = sub.add_parser("health", help="check sync freshness")
     health.set_defaults(func=cmd_health)

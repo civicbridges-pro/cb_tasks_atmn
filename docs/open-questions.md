@@ -75,6 +75,36 @@ page fans out instead of waiting for a coverage window. The config validator rej
 
 Confirm or correct this with the team. It is a real decision, not a config detail.
 
+## 9. Who owns an inbound customer quote request?
+
+The brief's routing matrix has no lane for a customer asking us for a price. The closest
+entries are "solicitations, bid decisions" (Usman) and "vendor and OEM quotes" (Jason), and
+those describe the opposite direction of trade: a federal solicitation coming in, and our
+request going out to a supplier.
+
+Without a lane, a school district asking for a quote landed in whichever lane happened to
+share a word with it.
+
+**Interim resolution:** a `quote_request` lane in `config/routing.yaml`, primary Usman,
+backup Joe, escalating to Doug, matching on customer-side phrasing ("quote request", "please
+quote", "availability"). Chosen because it is the closest thing to a bid decision, but this
+is a guess about how the company actually works.
+
+Confirm the owner. If SLED quote requests are really Jason's or Morgan's, say so: it is a
+one-line change and it decides whose digest they land on every morning.
+
+## 10. Is a counterparty a supplier or a customer?
+
+`config/counterparties.yaml` classifies by domain into `oem`, `distributor`,
+`customer_sled`, and so on, and the lists are still empty pending Zoho. Until they are
+populated, a distributor who buys from us and a distributor who sells to us look identical,
+so an inbound "where is our quote" from either one is genuinely ambiguous and routes to the
+triage queue.
+
+That is the correct behavior, and it is also avoidable: populating the counterparty classes
+from Zoho removes a whole category of triage-queue traffic. Worth doing before Phase 1 goes
+live rather than after.
+
 ## 8. Two escalation paths terminate at the backup
 
 Brief §7 lists these:

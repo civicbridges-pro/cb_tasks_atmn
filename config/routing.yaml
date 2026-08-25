@@ -4,6 +4,13 @@
 # Every obligation gets exactly one primary owner. `backup` covers the primary's
 # off-hours and absences. `escalates_to` is where an SLA breach goes, and it must never
 # equal `backup`, or the escalation is a no-op.
+#
+# `match` terms classify a message. Longest matched term wins, so a specific phrase beats a
+# generic one. Where two lanes legitimately share vocabulary, `prefer_when` and `avoid_when`
+# break the tie on facts the message itself carries rather than on a hidden code heuristic:
+# an outbound message asking for price is us chasing a vendor, while the same words inbound
+# from a .mil is a solicitation. Both adjust confidence, neither forces a result, and a
+# genuine tie still lands in the triage queue.
 
 unclassified:
   primary: triage_queue
@@ -13,19 +20,41 @@ unclassified:
 
 rules:
   - type: solicitation
-    match: [solicitations, bid decisions, rfq, dibbs, sources sought, presolicitation]
+    match: [solicitation, solicitations, bid decision, bid decisions, dibbs,
+            sources sought, presolicitation, combined synopsis, rfq, request for quote]
+    prefer_when: {counterparty_class: gov, direction: inbound}
+    primary: usman
+    backup: joe
+    escalates_to: doug
+
+  - type: quote_request
+    # Not in the brief's matrix. A customer asking us for a price is neither a federal
+    # solicitation nor a vendor quote, and it was landing in whichever lane shared a word
+    # with it. Confirm the owner: see docs/open-questions.md question 9.
+    match: [quote request, request a quote, requesting a quote, please quote, can you quote,
+            could you quote, would you quote,
+            pricing request, request for pricing, need pricing, quote for,
+            availability, in stock, stock availability, do you have]
+    prefer_when: {direction: inbound}
     primary: usman
     backup: joe
     escalates_to: doug
 
   - type: vendor_quote
-    match: [vendor quote, oem quote, channel issue, letter of supply, authorized distributor]
+    match: [vendor quote, oem quote, channel issue, letter of supply,
+            authorized distributor, authorized channel, rfq, price and lead time,
+            lead time, price and availability, requesting price]
+    # Outbound is us asking a vendor. The same words inbound from an agency are a
+    # solicitation, which is why both lanes carry a preference instead of one owning "rfq".
+    prefer_when: {direction: outbound}
+    avoid_when: {counterparty_class: gov}
     primary: jason
     backup: morgan
     escalates_to: doug
 
   - type: purchase_order
-    match: [purchase order, sourcing execution, po issued, vendor po]
+    match: [purchase order, sourcing execution, po issued, vendor po, "po#", "p.o.#",
+            signed po, order acknowledgment, order ack]
     primary: joe
     backup: morgan
     escalates_to: jason
@@ -50,7 +79,11 @@ rules:
       than waiting for a coverage window. Does not enter a queue.
 
   - type: delivery
-    match: [delivery, logistics, inspection, shipment, packing slip, dd250, freight]
+    # Deliberately not the bare word "delivery": it appears in almost every contract email
+    # and was pulling unrelated traffic into the logistics lane.
+    match: [delivery order, delivery date, delivery schedule, logistics, inspection,
+            shipment, shipped, packing slip, dd250, dd 250, freight, tracking number,
+            first article]
     primary: roy
     backup: taj
     escalates_to: jason

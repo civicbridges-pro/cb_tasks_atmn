@@ -36,7 +36,7 @@ Automating replies without that ledger underneath produces faster fragmentation.
 | --- | --- | --- | --- |
 | L1 Capture | every mailbox and channel into one normalized message store, read-only | `cbops/ingest/`, `cbops/normalize.py` | 0 |
 | L2 Extraction | is there an obligation here, whose, by when, tied to which contract | `cbops/extract/` | 0 and 1 |
-| L3 Routing and SLA | one named owner, one clock, escalation on breach, daily digests | `config/routing.yaml`, `cbops/clock.py` | 1 |
+| L3 Routing and SLA | one named owner, one clock, escalation on breach, daily digests | `cbops/agents/`, `cbops/digests/` | 1 |
 | L4 Drafting | outbound drafts in the correct voice with attachments pre-attached | not built | 2 |
 | L5 Narrow autonomy | send without approval, reversible low-stakes loops only | not built | 4 |
 
@@ -72,8 +72,9 @@ Four invariants, enforced in `cbops/store.py` rather than documented and hoped f
 
 The system of record for obligations is a custom module inside **Zoho CRM**, not this
 database. Zoho is already trusted as truth, and a second place people have to update is a
-place people stop updating. From Phase 1 the local store is the message index plus a mirror,
-so reports run without hammering the Zoho API.
+place people stop updating. Zoho writeback turns on in Phase 2; until then the local store
+is the ledger, and from Phase 2 it becomes the message index plus a mirror so reports run
+without hammering the Zoho API.
 
 **Contract number is the primary key across every system.**
 
@@ -107,3 +108,54 @@ The three things most likely to kill this program:
 3. **Automating a broken process.** Some of these workflows are fragmented because the
    process was never defined, not because nobody automated it. Phase 0 exposes which. Fix
    those on paper before pointing code at them.
+
+
+## Phase 1: the ledger, and how it goes live safely
+
+Phase 1 turns the ledger on and keeps outbound off. Four agents, none of which send
+anything:
+
+| Agent | Job | The rule that governs it |
+| --- | --- | --- |
+| `agents/triage.py` | message becomes an obligation, or becomes a question | never guess: under the confidence threshold goes to the queue, not to a person |
+| `agents/router.py` | one named owner, one clock, one escalation path | `they_owe_us` opens as `waiting_external` with a clock, because waiting is not done |
+| `agents/chaser.py` | advances the cadence, escalates when it is spent | backward from a real deadline when one exists, fixed interval only as fallback |
+| `agents/auditor.py` | thirteen consistency checks over ledger and config | reports, never repairs: guardrail 3 forbids auto-close |
+
+Output reaches people through `digests/personal.py` (one per owner, ordered by what breaks
+first) and `digests/exec_rollup.py` (is the system telling the truth, what is about to cost
+money, what needs a decision). `./cb owed` answers the Phase 1 exit test in one command.
+
+### Preview mode
+
+CLAUDE.md says not to build Phase N+1 while Phase N is unproven, and Phase 0 has not yet
+run against real mail. So every agent that writes to the ledger is gated:
+
+```bash
+./cb triage            # computes the full ledger, writes nothing
+./cb triage --commit   # refuses unless config/guardrails.yaml declares phase 1
+```
+
+Preview needs no permission because it persists nothing. That means the entire Phase 1
+ledger can be inspected against real mail while the deployment is still the Phase 0
+observatory, and Phase 1 goes live on evidence rather than on faith. The committed config
+stays at `phase: 0` until a human changes it.
+
+### Classifying without guessing
+
+Lane assignment is deterministic: the `match` terms in `config/routing.yaml`, longest term
+wins. Lanes that legitimately share vocabulary are separated by `prefer_when` and
+`avoid_when` clauses evaluated against facts the message carries, so the tie-break lives in
+config where the team can argue with it rather than in code where they cannot.
+
+- A clause is conjunctive. "prefer when inbound and from a government counterparty" is one
+  condition; an inbound message from a distributor satisfies neither half alone.
+- `avoid_when` is a veto, not a penalty, because it states what a lane *is*: a vendor quote
+  addressed to a contracting officer is not a vendor quote, however many vendor words it
+  contains. A vetoed lane still wins uncontested, at reduced confidence, rather than letting
+  the message classify as nothing.
+
+Confidence measures how clearly one lane owns the message, not how many words matched. One
+unmistakable term is confident. Two lanes each holding a substantive term is ambiguous
+whatever the arithmetic says, and it drops below the routing threshold so a human decides
+instead of whichever string happened to be longer.

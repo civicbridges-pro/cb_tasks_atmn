@@ -1,10 +1,11 @@
-.PHONY: help test doctor phase0 ingest-fixtures clean
+.PHONY: help test doctor phase0 phase1 ingest-fixtures clean
 
 help:
 	@echo "make test              run the suite"
 	@echo "make doctor            validate config, schema, guardrails, environment"
 	@echo "make ingest-fixtures   load the fixture corpus into a fresh store"
 	@echo "make phase0            ingest fixtures then run every Phase 0 report"
+	@echo "make phase1            preview the whole Phase 1 ledger loop, writing nothing"
 	@echo "make clean             remove the local store and generated reports"
 
 test:
@@ -19,6 +20,12 @@ ingest-fixtures:
 
 phase0: ingest-fixtures
 	./cb phase0
+
+# Preview only. Persisting to the ledger needs phase 1 declared in config/guardrails.yaml.
+# The leading dash is deliberate: the fixture corpus contains deliberately overdue and
+# unowned obligations, so a clean preview run still reports findings.
+phase1: ingest-fixtures
+	-./cb phase1
 
 clean:
 	rm -rf var __pycache__ .killswitch

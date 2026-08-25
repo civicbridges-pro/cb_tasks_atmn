@@ -86,6 +86,11 @@ Machine-readable in `config/guardrails.yaml`. Non-negotiable:
 
 Current phase: **Phase 0, Observatory.** Read-only. Nothing sends. Nothing writes to Zoho.
 
+The Phase 1 ledger is built but gated. `config/guardrails.yaml` declares the live phase, and
+until a human raises it every ledger-writing command runs in preview: it computes exactly
+what would be written and persists nothing. Preview the ledger against real mail first, then
+raise the phase. Never raise it in code, and never as a side effect of another change.
+
 | Phase | Window | What turns on |
 | --- | --- | --- |
 | 0 Observatory | weeks 1-2 | read-only capture, four leak reports, baseline metrics |
@@ -101,6 +106,10 @@ and 3. Resist jumping to autonomy.
 
 - `./cb doctor` validates config and environment. Run it after any config change.
 - `./cb phase0` runs the four Phase 0 reports plus baseline metrics.
+- `./cb phase1` previews the whole ledger loop: triage, routing, cadence, audit, digests.
+  Add `--commit` to persist, which requires phase 1 to be declared.
+- `./cb owed` answers "what does this company owe, to whom, by when". That sentence is the
+  Phase 1 exit test, so it is one command.
 - `make test` runs the suite. `tests/fixtures/` is the gold. Extraction quality is entirely
   a function of how many real messy examples the classifier has seen. Add every
   interesting real thread (anonymized) as a fixture.
