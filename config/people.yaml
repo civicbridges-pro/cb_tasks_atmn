@@ -1,0 +1,92 @@
+# Named humans. The ledger requires exactly one human owner per obligation, so every
+# owner referenced anywhere in config/ must exist here.
+#
+# coverage_hours drive the SLA clock. Values marked TODO_CONFIRM are placeholders that a
+# human must confirm before Phase 1; `./cb doctor` lists them. An unconfirmed coverage
+# window makes every clock that touches it dishonest, so doctor fails loud, not quiet.
+
+defaults:
+  workweek: [mon, tue, wed, thu, fri]
+  # Weekend and holiday work does not count toward response clocks unless a person
+  # explicitly opts in below.
+  holidays_calendar: us_federal
+
+people:
+  doug:
+    name: Doug
+    role: VP Business Development
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "07:00-18:00"      # TODO_CONFIRM
+    is_executive: true
+    notes: >
+      Program sponsor. Also the person most likely to become the bottleneck, see
+      docs/open-questions.md Q4. Escalation terminus for most paths.
+  anna:
+    name: Anna
+    role: Operations / Compliance
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "07:00-17:00"      # TODO_CONFIRM
+    is_executive: true
+  jason:
+    name: Jason
+    role: Vendor and OEM relationships
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "07:00-17:00"      # TODO_CONFIRM
+  joe:
+    name: Joe
+    role: Purchasing and sourcing execution
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "07:00-17:00"      # TODO_CONFIRM
+  analiza:
+    name: Analiza
+    role: AP and AR
+    email: TODO_CONFIRM
+    timezone: TODO_CONFIRM
+    coverage_hours: TODO_CONFIRM
+  amanda:
+    name: Amanda
+    role: Payroll, HR, insurance, benefits
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "08:00-16:00"      # TODO_CONFIRM
+  roy:
+    name: Roy
+    role: Delivery, logistics, inspection
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "07:00-16:00"      # TODO_CONFIRM
+  morgan:
+    name: Morgan
+    role: Sourcing and vendor support
+    email: TODO_CONFIRM
+    timezone: America/Boise            # TODO_CONFIRM
+    coverage_hours: "08:00-17:00"      # TODO_CONFIRM
+  taj:
+    name: Taj
+    role: Contracts, mods, awards
+    email: TODO_CONFIRM
+    timezone: TODO_CONFIRM             # offset hours, overseas
+    coverage_hours: TODO_CONFIRM
+    offset_hours: true
+    notes: >
+      Works offset hours. Load the queue before their day starts, review when the US day
+      starts. See docs/open-questions.md on the stop-work routing conflict: stop-work and
+      mods are high consequence and must page immediately, which an offset-hours primary
+      owner cannot satisfy alone.
+  usman:
+    name: Usman
+    role: Solicitations and bid decisions
+    email: TODO_CONFIRM
+    timezone: TODO_CONFIRM             # offset hours, overseas
+    coverage_hours: TODO_CONFIRM
+    offset_hours: true
+
+# Groups exist for digest distribution only. A group may never own an obligation.
+groups:
+  exec: [doug, anna]
+  overseas: [taj, usman]
+  all_owners: [anna, jason, joe, analiza, amanda, roy, morgan, taj, usman]

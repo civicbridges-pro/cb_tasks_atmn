@@ -1,0 +1,22 @@
+Message-ID: <gov-002@dla.mil>
+From: Tech Data <techdata@dla.mil>
+To: quotes@civicbridges.com
+Subject: Drawing package // SPE4A6-24-D-0123
+Date: Fri, 21 Aug 2026 11:00:00 -0400
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="cbbound42"
+
+--cbbound42
+Content-Type: text/plain; charset=utf-8
+
+CUI
+
+DISTRIBUTION STATEMENT C. Distribution authorized to U.S. Government agencies and
+their contractors. Attached drawing revision D applies.
+
+--cbbound42
+Content-Type: application/pdf; name="assembly-rev-d.SLDPRT"
+Content-Disposition: attachment; filename="assembly-rev-d.SLDPRT"
+
+%PDF-1.4 fixture
+--cbbound42--

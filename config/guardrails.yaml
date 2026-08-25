@@ -1,0 +1,100 @@
+# Machine-readable form of the guardrails in CLAUDE.md. Code reads this file; humans read
+# CLAUDE.md. They must agree. `./cb doctor` checks that this file parses and that every
+# named human exists in people.yaml.
+
+phase: 0            # 0 = observatory, read-only. Nothing sends. Nothing writes to Zoho.
+
+outbound:
+  enabled: false                # Phase 0. Flipped by phase, not by an agent.
+  kill_switch_file: .killswitch # Presence of this file halts all outbound, no exceptions.
+  never_autosend_to_classes:
+    - gov                       # Guardrail 1. Contracting officers and agencies. Ever.
+  never_autosend_types:
+    - stop_work
+    - contract_action
+    - award
+    - invoice
+    - solicitation
+  # Phase 4 candidates only, and only after a clean track record. Worst case for every
+  # entry here must be a slightly redundant email.
+  autonomy_candidates:
+    - vendor_chase
+    - internal_status_ping
+    - acknowledgment_receipt
+    - document_request
+
+commitments:
+  # Drafts may propose. Humans commit.
+  never_autonomously_commit:
+    - price
+    - delivery_date
+    - contract_terms
+    - warranty
+    - certification_status
+  approval_threshold_usd: TODO_CONFIRM   # above this, Doug or Anna, in writing, logged
+  approvers: [doug, anna]
+
+lifecycle:
+  no_auto_archive: true
+  no_auto_delete: true
+  no_auto_close: true
+  close_requires_evidence: true
+
+classification:
+  # Classify and quarantine before ingesting, not after. When in doubt, quarantine.
+  quarantine_on_match: true
+  quarantine_dir: var/quarantine
+  cui_markers:
+    - "CUI"
+    - "CONTROLLED UNCLASSIFIED INFORMATION"
+    - "DISTRIBUTION STATEMENT B"
+    - "DISTRIBUTION STATEMENT C"
+    - "DISTRIBUTION STATEMENT D"
+    - "DISTRIBUTION STATEMENT E"
+    - "DISTRIBUTION STATEMENT F"
+    - "EXPORT CONTROLLED"
+    - "ITAR"
+    - "EAR99"
+    - "22 CFR 120"
+    - "15 CFR 730"
+    - "FOR OFFICIAL USE ONLY"
+    - "FOUO"
+    - "NOFORN"
+  quarantine_attachment_extensions:
+    - .dwg
+    - .dxf
+    - .step
+    - .stp
+    - .iges
+    - .igs
+    - .sldprt
+    - .sldasm
+    - .catpart
+  notes: >
+    Attachment extension quarantine is deliberately broad. Technical drawings are the most
+    likely carrier of export-controlled data and the least likely to be marked correctly.
+    A false quarantine costs a human a minute. A false ingest is an incident.
+
+confidence:
+  # An agent that quietly mislabels a stop-work order as routine is worse than no agent.
+  min_to_act: 0.85
+  min_to_record_without_review: 0.70
+  below_threshold: triage_queue
+  # Some types never bypass a human regardless of confidence.
+  always_human_review:
+    - stop_work
+    - contract_action
+    - award
+
+audit:
+  # If this ever gets audited, the log is the defense.
+  log_every_action: true
+  log_prompt_and_output: true
+  retain_days: 2555            # 7 years, federal contract records
+  redact_in_logs: [password, app_password, api_key, token, secret]
+
+health:
+  # A mail sync that stalls quietly on a Tuesday is the number one way this system fails.
+  mailbox_stale_after_minutes: 60
+  alert_on_zero_messages_hours: 6
+  require_last_sync_on_every_report: true

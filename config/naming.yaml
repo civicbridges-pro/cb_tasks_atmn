@@ -1,0 +1,59 @@
+# Drive and document conventions. Machine-parseable so the auditor can find an evidence
+# link from a contract number without a human in the loop.
+#
+# Canonical filename:
+#   {ref}__{doc_type}__{counterparty}__{YYYY-MM-DD}__v{n}.{ext}
+#
+# ref          contract #, delivery order #, or solicitation # with slashes as dashes
+# doc_type     from doc_types below, lowercase, hyphenated
+# counterparty short slug, lowercase, hyphenated, from Zoho account name
+# date         document date, not upload date
+# v{n}         integer, starts at 1, never reused
+
+filename_pattern: "{ref}__{doc_type}__{counterparty}__{date}__v{version}.{ext}"
+
+filename_regex: >-
+  ^(?P<ref>[A-Za-z0-9\-]+)__(?P<doc_type>[a-z0-9\-]+)__(?P<counterparty>[a-z0-9\-]+)__(?P<date>\d{4}-\d{2}-\d{2})__v(?P<version>\d+)\.(?P<ext>[A-Za-z0-9]+)$
+
+doc_types:
+  - solicitation
+  - vendor-rfq
+  - vendor-quote
+  - our-quote
+  - award
+  - modification
+  - stop-work
+  - purchase-order
+  - order-ack
+  - letter-of-supply
+  - cert-of-conformance
+  - packing-slip
+  - inspection-report
+  - dd250
+  - invoice
+  - remittance
+  - registration
+  - insurance
+  - correspondence
+
+drive_layout:
+  contracts: "Contracts/{contract_ref}/"
+  solicitations: "Solicitations/{fiscal_year}/{solicitation_ref}/"
+  vendors: "Vendors/{counterparty}/"
+  compliance: "Compliance/{item}/"
+  quarantine: "DO-NOT-INGEST/"
+
+# Reference formats seen in CivicBridges traffic. Used by the extractor to tie a message
+# to a contract without asking a human. Correct these against real historical mail.
+# PIID format per FAR 4.16: six-character activity code, two-digit fiscal year, one
+# instrument-type letter, four to five digit serial. The instrument letter is what
+# separates a solicitation from an award, so the two patterns differ only there:
+# Q R T U V W X are solicitations and requests for quote. The rest are awards and orders.
+reference_patterns:
+  dla_contract: "\\b[A-Z0-9]{6}-[0-9]{2}-[ACDEFGHJKLMNPSZ]-[0-9]{4,5}\\b"
+  dla_solicitation: "\\b[A-Z0-9]{6}-[0-9]{2}-[QRTUVWX]-[0-9]{4,5}\\b"
+  delivery_order: "(?:DO|D\\.O\\.|delivery order)\\s*#?\\s*([0-9]{4,6})"
+  nsn: "[0-9]{4}-?[0-9]{2}-?[0-9]{3}-?[0-9]{4}"
+  cage: "\\b[0-9A-Z]{5}\\b"
+  purchase_order: "(?:PO|P\\.O\\.)\\s*#?\\s*([A-Z0-9\\-]{4,20})"
+  rfq: "\\bRFQ\\s*#?\\s*([A-Z0-9\\-]{4,20})"

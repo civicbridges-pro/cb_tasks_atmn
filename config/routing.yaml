@@ -1,0 +1,90 @@
+# Signal type -> owner rules. Starting point taken from the build brief section 7.
+# Correct this with the team before Phase 1; it is a draft, not a decision.
+#
+# Every obligation gets exactly one primary owner. `backup` covers the primary's
+# off-hours and absences. `escalates_to` is where an SLA breach goes, and it must never
+# equal `backup`, or the escalation is a no-op.
+
+unclassified:
+  primary: triage_queue
+  backup: doug
+  escalates_to: doug
+  notes: Never guess. Low confidence and unknown type land here by design.
+
+rules:
+  - type: solicitation
+    match: [solicitations, bid decisions, rfq, dibbs, sources sought, presolicitation]
+    primary: usman
+    backup: joe
+    escalates_to: doug
+
+  - type: vendor_quote
+    match: [vendor quote, oem quote, channel issue, letter of supply, authorized distributor]
+    primary: jason
+    backup: morgan
+    escalates_to: doug
+
+  - type: purchase_order
+    match: [purchase order, sourcing execution, po issued, vendor po]
+    primary: joe
+    backup: morgan
+    escalates_to: jason
+
+  - type: contract_action
+    match: [contract, award, modification, mod, delivery order, novation]
+    primary: taj
+    backup: anna
+    escalates_to: [doug, anna]
+
+  - type: stop_work
+    match: [stop work, stop-work, cure notice, show cause, termination]
+    primary: taj
+    backup: anna
+    escalates_to: [doug, anna]
+    # Overrides normal routing. Rare, high consequence, easy to fumble.
+    page_immediately: true
+    ignore_coverage_hours: true
+    also_notify: [doug, anna]
+    notes: >
+      Primary owner works offset hours, so this signal pages the full list at once rather
+      than waiting for a coverage window. Does not enter a queue.
+
+  - type: delivery
+    match: [delivery, logistics, inspection, shipment, packing slip, dd250, freight]
+    primary: roy
+    backup: taj
+    escalates_to: jason
+
+  - type: invoice
+    match: [invoice, ap, ar, wawf, payment, remittance, ipp]
+    primary: analiza
+    backup: amanda
+    escalates_to: anna
+    notes: >
+      Brief listed backup and escalation both as Amanda. An escalation path that
+      terminates at the backup is not an escalation, so escalation is set to Anna
+      pending confirmation. See docs/open-questions.md.
+
+  - type: hr_payroll
+    match: [payroll, hr, insurance, benefits, workers comp, onboarding]
+    primary: amanda
+    backup: anna
+    escalates_to: doug
+    notes: >
+      Brief listed backup and escalation both as Anna. Same fix as invoice, pending
+      confirmation.
+
+  - type: compliance
+    match: [sam renewal, wosb, recertification, d&b, duns, state registration, cage]
+    primary: anna
+    backup: amanda
+    escalates_to: doug
+
+# Counterparty class can override the owner regardless of topic.
+overrides:
+  - when: {counterparty_class: gov}
+    require_human_approval: true
+    notes: Guardrail 1. No autonomous outbound to a contracting officer or agency, ever.
+  - when: {counterparty_class: sled}
+    sla_profile: sled
+    notes: School districts and municipalities behave nothing like DLA.

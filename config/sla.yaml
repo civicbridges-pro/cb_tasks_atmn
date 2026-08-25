@@ -1,0 +1,118 @@
+# Response and completion clocks by obligation type.
+#
+# response_hours  = time to acknowledge, in business hours against the owner's coverage
+# completion_hours = time to actually close the obligation
+# chase_cadence   = how a waiting_external obligation decays into a follow-up
+#
+# A `deadline_driven` type ignores fixed intervals and works backward from a real external
+# date (solicitation close, delivery date, invoice due). That is the whole point of the
+# vendor chase design: chasing on a fixed 3-day interval when a solicitation closes
+# tomorrow is useless.
+#
+# Merge order, most specific last: the default profile, then the counterparty class profile,
+# then this type's own values. So a type that sets response_hours here fixes that clock for
+# every counterparty. Leave it unset when the counterparty should decide, which is the case
+# for anything that arrives from DLA, a school district, and a commercial customer alike.
+# A type that must ignore the counterparty says `profile:` explicitly instead.
+
+profiles:
+  default:
+    response_hours: 4
+    completion_hours: 48
+    chase_cadence: [24, 48, 96]
+    escalate_after_chases: 3
+
+  gov:
+    response_hours: 2
+    completion_hours: 24
+    chase_cadence: [12, 24]
+    escalate_after_chases: 2
+    requires_human_approval: true
+
+  sled:
+    # Districts and municipalities move on their own calendar. Chasing hard reads badly.
+    response_hours: 8
+    completion_hours: 120
+    chase_cadence: [72, 168, 336]
+    escalate_after_chases: 3
+
+  internal:
+    response_hours: 8
+    completion_hours: 72
+    chase_cadence: [24, 48]
+    escalate_after_chases: 2
+
+types:
+  stop_work:
+    response_hours: 0.25
+    completion_hours: 4
+    page_immediately: true
+    ignore_coverage_hours: true
+
+  contract_action:
+    response_hours: 2
+    completion_hours: 24
+    profile: gov
+
+  award:
+    response_hours: 2
+    # Award to vendor PO issued. Named metric, hard SLA. This is where margin leaks.
+    completion_hours: 24
+    metric: award_to_po_hours
+
+  solicitation:
+    # No response_hours on purpose: the counterparty class sets it, so a DLA solicitation
+    # gets the 2 hour gov clock and a school district gets 8.
+    deadline_driven: true
+    deadline_field: solicitation_close_at
+    # Backward-planned checkpoints, in hours before close.
+    backward_checkpoints: [168, 72, 48, 24, 8]
+
+  vendor_quote:
+    response_hours: 4
+    deadline_driven: true
+    deadline_field: solicitation_close_at
+    backward_checkpoints: [120, 72, 48, 24]
+    escalate_to_named_contact_at_hours_before_close: 48
+    notes: >
+      The Marotta pattern. An OEM sits on a quote and the solicitation clock runs out.
+      Cadence is driven backward from the close date and escalates to a named human at
+      the OEM, not to a shared sales alias.
+
+  purchase_order:
+    response_hours: 4
+    completion_hours: 24
+
+  delivery:
+    # Inspection and shipment traffic comes from DLA and from commercial customers, so the
+    # counterparty class sets the response clock here too.
+    deadline_driven: true
+    deadline_field: contract_delivery_date
+    backward_checkpoints: [336, 168, 72, 24]
+
+  invoice:
+    response_hours: 8
+    completion_hours: 72
+    metric: invoice_to_payment_days
+
+  compliance:
+    # Date driven, catastrophic if missed, trivially automatable. Build early.
+    deadline_driven: true
+    deadline_field: expires_at
+    backward_checkpoints: [2160, 1440, 720, 336, 168, 72]   # 90, 60, 30, 14, 7, 3 days
+    never_auto_close: true
+
+  hr_payroll:
+    response_hours: 8
+    completion_hours: 72
+    profile: internal
+
+  internal_request:
+    profile: internal
+
+# Phase 0 report thresholds.
+phase0:
+  unanswered_after_hours: 48
+  vendor_silence_default_hours: 72
+  handoff_silence_hours: 48
+  promise_grace_hours: 4

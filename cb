@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# CivicBridges ops CLI. Scheduled runs call this from cron; nobody sits in a session.
+set -euo pipefail
+cd "$(dirname "$0")"
+exec python3 -m cbops.cli "$@"

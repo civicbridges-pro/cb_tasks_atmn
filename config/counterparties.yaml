@@ -1,0 +1,71 @@
+# Counterparty classification and importance. Drives report sort order (the Unanswered
+# Thread Report sorts by counterparty importance, never by date) and SLA profile.
+#
+# Classes: gov, oem, distributor, customer_sled, customer_commercial, internal, service,
+#          unknown
+#
+# Populate from Zoho CRM accounts. This file is the seed and the override layer; the
+# Zoho sync fills the rest. Domains listed here win over anything synced.
+
+our_domains:
+  - civicbridges.com
+
+classes:
+  gov:
+    importance: 100
+    sla_profile: gov
+    never_autosend: true
+    domain_suffixes: [.mil, .gov]
+    domain_patterns:
+      - "dla\\.mil$"
+      - "dfas\\.mil$"
+      - "sam\\.gov$"
+  oem:
+    importance: 80
+    sla_profile: default
+    domains: []          # TODO_CONFIRM populate from Zoho, e.g. Marotta, Pioneer Spares
+  distributor:
+    importance: 60
+    sla_profile: default
+    domains: []          # TODO_CONFIRM
+  customer_sled:
+    importance: 70
+    sla_profile: sled
+    domain_suffixes: [.k12.id.us, .us]
+    domain_patterns:
+      - "\\.k12\\."
+      - "schools?\\."
+      - "(city|county|district|municipal)"
+  customer_commercial:
+    importance: 65
+    sla_profile: default
+    domains: []
+  internal:
+    importance: 40
+    sla_profile: internal
+    domains: [civicbridges.com]
+  service:
+    # Accountants, insurance, banks. Real obligations, lower blast radius.
+    importance: 30
+    sla_profile: default
+    domains: []          # TODO_CONFIRM e.g. Cooper Norman, Bill.com, QuickBooks
+  unknown:
+    importance: 50
+    sla_profile: default
+
+# Named contacts to escalate to at an OEM, instead of a shared sales alias. Guardrail
+# against the Marotta pattern: a quote request that dies in sales@.
+named_escalation_contacts: {}   # TODO_CONFIRM
+
+# Noise. Excluded from every report so the leak counts stay honest.
+ignore_senders:
+  - noreply@
+  - no-reply@
+  - donotreply@
+  - notifications@
+  - mailer-daemon@
+  - postmaster@
+ignore_subject_patterns:
+  - "^(out of office|automatic reply|auto[- ]?reply)"
+  - "undeliverable"
+  - "delivery status notification"

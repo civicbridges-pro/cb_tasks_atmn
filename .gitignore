@@ -1,0 +1,19 @@
+# Local store and generated reports. Never committed: the message store holds real mail.
+var/
+*.db
+*.db-wal
+*.db-shm
+
+# Kill switch state is local to a machine.
+.killswitch
+
+# Mailbox declarations carry addresses and reader names. Keep them out of git; credentials
+# live in the environment and in a secrets manager, never in this repo.
+config/mailboxes.json
+config/telegram-people.json
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
